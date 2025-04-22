@@ -2,12 +2,9 @@
 import argparse
 
 parser = argparse.ArgumentParser(description="MPI Clifford Circuit Simulation")
-parser.add_argument("--qubits", type=int, default=16, help="Number of qubits")
-parser.add_argument("--depth", type = int, default=10, help="Depth of circuit")
-parser.add_argument("--shots", type=int, default=1024, help="Number of shots")
+parser.add_argument("--qubits", type=int, default=20, help="Number of qubits")
+parser.add_argument("--depth", type = int, default=15, help="Depth of circuit")
 parser.add_argument("--scaling", type=int, default=1, help="Scaler")
-parser.add_argument("--method", type=str, default="statevector", help="Simulation method")
-parser.add_argument("--device", type=str, default="CPU", help="Simulation device (CPU or GPU)")
 
 args = parser.parse_args()
 
@@ -38,7 +35,7 @@ weak = args.scaling
 qubits = args.qubits # Number of qubits
 depth = args.depth * 3 # Depth of the circuit
 seed = 42   # Seed for reproducibility
-shots = args.shots # Number of shots (number of times the circuit is executed)
+shots =1024 # Number of shots (number of times the circuit is executed)
 
 
 experiment_name = "clifford_circuit_" + str(qubits) + "q_" + str(depth) + "d"
@@ -46,39 +43,34 @@ experiment_name = "clifford_circuit_" + str(qubits) + "q_" + str(depth) + "d"
 
 if weak:
     experiment_name += "_weak"
-    shots = shots * size
+    
 else:
     experiment_name += "_strong"
-    shots = shots * 8
+    shots = (shots * 8) //size
 
 # --- Qiskit Setup (Executed by all processes, but AerSimulator handles distribution) ---
 # Initialize the simulator
 # Note: device='GPU' requires a system with MPI-aware CUDA setup across nodes.
 
 sim = AerSimulator(
-    method= args.method,
+    method= "statevector",
     device='CPU', # Change to 'CPU' if running on a CPU cluster without MPI-aware GPU setup
     blocking_enable=True, # May help with GPU memory management
     blocking_qubits=27,
-    max_parallel_shots = size,
-    max_parallel_threads = size
+    max_parallel_shots = 1
 )
 
 # Create a quantum circuit with the specified number of qubits
 circ = random_clifford_circuit(qubits, depth, seed=seed)
-
-cliff = Clifford(circ)
-cliff_circ = cliff.to_circuit()
-
 circ.measure_all()
-cliff_circ.measure_all()
 
 # Transpile the circuit for the simulator
 if rank == 0:
     print("\n","-" * 30, flush=True)
+    print(experiment_name, flush=True)
     print(f"Starting transpilation for {qubits} qubits on {size} MPI processes...", flush=True)
-    print(f"Number of shots per process: {shots//size}", flush=True)
-    print(f"Total number of shots per process: {shots}", flush=True)
+    print(f"Number of shots per process: {shots}", flush=True)
+    print(f"Total number of shots per process: {shots//size}", flush=True)
 #######
 comm.Barrier() # Synchronize before timing the run
 start_time = time.time()
@@ -89,19 +81,10 @@ end_time = time.time()
 
 transpile_time = end_time - start_time
 
-#####
-comm.Barrier() # Ensure all processes finish before stopping timer
-start_time = time.time()
-cliff_transpiled = transpile(cliff_circ, sim)
-comm.Barrier() # Ensure all processes finish before stopping timer
-end_time = time.time()
-
-cliff_transpile_time = end_time - start_time
 
 
 if rank == 0:
     print(f"Transpilation finished in {transpile_time:.2f} seconds.", flush=True)
-    print(f"Clifford Transpilation finished in {cliff_transpile_time:.2f} seconds.", flush=True)
     print("-" * 30, flush=True)
     print(f"Running simulation...", flush=True)
 
@@ -114,17 +97,11 @@ end_time = time.time()
 
 simulation_time = end_time - start_time
 
-comm.Barrier() # Ensure all processes finish before stopping timer
-start_time = time.time()
-cliff_result = sim.run(cliff_transpiled, shots=shots).result() # shots added for clarity, though statevector doesn't strictly need them for counts
-comm.Barrier() # Ensure all processes finish before stopping timer
-end_time = time.time()
-cliff_simulation_time = end_time - start_time
+
 
 # --- Process Results (Rank 0 handles output/plotting) ---
 if rank == 0:
     print(f"Simulation finished in {simulation_time:.2f} seconds.", flush=True)
-    print(f"Clifford Simulation finished in {cliff_simulation_time:.2f} seconds.", flush=True)
     print("-" * 30, flush=True)
     try:
         counts = result.get_counts(circ_transpiled)
